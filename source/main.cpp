@@ -28,9 +28,11 @@
 #include <switch.h>
 #include <algorithm> 
 #include <cctype>
+#include <vector>
 #include "utils.hpp"
 #include "cheat.hpp"
 
+// --- UTILS ---
 std::string normalize(std::string str) {
     str.erase(std::remove_if(str.begin(), str.end(), [](unsigned char c) { 
         return !std::isalnum(c); 
@@ -39,6 +41,7 @@ std::string normalize(std::string str) {
     return str;
 }
 
+// --- 1. CUSTOM LIST CLASS ---
 class SmartList : public tsl::elm::List {
 public:
     tsl::elm::Element* getSelectedItem() {
@@ -48,9 +51,44 @@ public:
     }
 };
 
+// --- 2. GUI NOTE CLASS ---
 class GuiNote : public tsl::Gui {
 public:
     GuiNote(std::string title, std::string text) : m_title(title), m_text(text) {}
+
+    // Helper to wrap text into multiple lines
+    std::vector<std::string> wrapText(const std::string& text, size_t maxLen) {
+        std::vector<std::string> lines;
+        std::istringstream stream(text);
+        std::string line;
+
+        while (std::getline(stream, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            
+            if (line.length() <= maxLen) {
+                lines.push_back(line);
+                continue;
+            }
+
+            size_t currentPos = 0;
+            while (currentPos < line.length()) {
+                if (line.length() - currentPos <= maxLen) {
+                    lines.push_back(line.substr(currentPos));
+                    break;
+                }
+
+                size_t splitPos = line.rfind(' ', currentPos + maxLen);
+                
+                if (splitPos == std::string::npos || splitPos <= currentPos) {
+                    splitPos = currentPos + maxLen;
+                }
+
+                lines.push_back(line.substr(currentPos, splitPos - currentPos));
+                currentPos = splitPos + 1; 
+            }
+        }
+        return lines;
+    }
 
     virtual tsl::elm::Element* createUI() override {
         auto rootFrame = new tsl::elm::HeaderOverlayFrame(97);
@@ -62,13 +100,12 @@ public:
 
         auto list = new tsl::elm::List();
         
-        list->addItem(new tsl::elm::CategoryHeader("Note Details"));
+        list->addItem(new tsl::elm::CategoryHeader("Details"));
 
-        std::stringstream ss(m_text);
-        std::string line;
-        while (std::getline(ss, line, '\n')) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            
+        // UPDATED: Wrap text to 30 characters per line
+        std::vector<std::string> wrappedLines = wrapText(m_text, 30);
+
+        for (const auto& line : wrappedLines) {
             auto item = new tsl::elm::ListItem(line);
             item->setClickListener([](u64 keys){ return false; }); 
             list->addItem(item);
@@ -93,6 +130,7 @@ private:
     std::string m_text;
 };
 
+// Forward Declaration
 class GuiStats;
 
 class GuiMain : public tsl::Gui {
@@ -108,6 +146,7 @@ public:
     static inline std::string s_runningBuildIDString;
 };
 
+// --- 3. GUI CHEATS CLASS ---
 class GuiCheats : public tsl::Gui {
 public:
     GuiCheats(std::string section) { 
@@ -119,12 +158,9 @@ public:
         std::map<std::string, std::string> notes;
         outCount = 0;
 
-        u64 tid = edz::cheat::CheatManager::getTitleID();
-        char tidStr[17];
-        snprintf(tidStr, sizeof(tidStr), "%016llX", (unsigned long long)tid);
-
-        char path[512];
-        snprintf(path, sizeof(path), "sdmc:/atmosphere/contents/%s/cheats/notes.txt", tidStr);
+        char path[256];
+        snprintf(path, sizeof(path), "sdmc:/atmosphere/contents/%016lX/cheats/notes.txt", 
+                 edz::cheat::CheatManager::getTitleID());
 
         std::ifstream file(path);
         if (!file.is_open()) file.open("sdmc:/atmosphere/cheats/notes.txt");
@@ -140,31 +176,29 @@ public:
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.empty()) continue;
 
-            size_t noteTagPos = line.find("[**Note:");
-            if (noteTagPos != std::string::npos) {
+            size_t openBracket = line.find("[");
+            size_t closeBracket = line.rfind("]");
+
+            if (openBracket == 0 && closeBracket != std::string::npos && closeBracket > openBracket) {
                 if (readingNote && !currentTargetNorm.empty() && !currentContent.empty()) {
                     notes[currentTargetNorm] = currentContent;
                     outCount++;
                 }
 
-                size_t endPos = line.find("]", noteTagPos);
-                if (endPos != std::string::npos) {
-                    std::string rawName = line.substr(noteTagPos + 8, endPos - (noteTagPos + 8));
-                    
-                    if (rawName.size() >= 2 && rawName.substr(rawName.size() - 2) == "**") {
-                        rawName = rawName.substr(0, rawName.size() - 2);
-                    }
-
-                    currentTargetNorm = normalize(rawName); 
-                    currentContent = "";
-                    readingNote = true;
+                std::string rawName = line.substr(openBracket + 1, closeBracket - openBracket - 1);
+                
+                if (rawName.find("--Section") != std::string::npos) {
+                    readingNote = false;
+                    continue;
                 }
+
+                currentTargetNorm = normalize(rawName); 
+                currentContent = "";
+                readingNote = true;
                 continue;
             }
 
             if (readingNote) {
-                if (line.find("[**Note:") != std::string::npos) continue; 
-                
                 std::string processedLine = line;
                 if (processedLine.size() >= 2 && processedLine.front() == '"' && processedLine.back() == '"') {
                     processedLine = processedLine.substr(1, processedLine.size() - 2);
@@ -199,15 +233,17 @@ public:
             } else {
                 char buf[64];
                 if (notesLoadedCount > 0) {
-                    snprintf(buf, sizeof(buf), "Cheats (Loaded %d Notes)", notesLoadedCount);
+                    snprintf(buf, sizeof(buf), "Cheats (%d Notes)", notesLoadedCount);
                     renderer->drawString(buf, false, 20, 52+23, 15, (tsl::style::color::ColorHighlight));
                 } else {
-                    renderer->drawString("Cheats (0 Notes Found)", false, 20, 52+23, 15, (tsl::bannerVersionTextColor));
+                    renderer->drawString("Cheats", false, 20, 52+23, 15, (tsl::bannerVersionTextColor));
                 }
             }
             
             if (edz::cheat::CheatManager::getProcessID() != 0) {
-                renderer->drawString(GuiMain::s_runningTitleIDString.c_str(), false, 250 +14, 40 -6, 15, (tsl::style::color::ColorHighlight));
+                renderer->drawString(GuiMain::s_runningTitleIDString.c_str(), false, 250 +14, 40 -6, 15, (tsl::style::color::ColorText));
+                renderer->drawString(GuiMain::s_runningBuildIDString.c_str(), false, 250 +14, 60 -6, 15, (tsl::style::color::ColorText));
+                renderer->drawString(GuiMain::s_runningProcessIDString.c_str(), false, 250 +14, 80 -6, 15, (tsl::style::color::ColorText));
             }
         }));
 
@@ -240,7 +276,6 @@ public:
 
                     if(!skip && cheat->getName().find("--SectionStart:") != std::string::npos){
                         std::string name = cheat->getName();
-                        
                         size_t startPos = name.find("SectionStart:");
                         if (startPos != std::string::npos) name = name.substr(startPos + 13);
                         size_t endDash = name.find("--");
@@ -325,7 +360,16 @@ public:
                 tsl::elm::Element* selected = m_list->getSelectedItem();
                 
                 if (selected && m_elementToNote.find(selected) != m_elementToNote.end()) {
-                    tsl::changeTo<GuiNote>("Cheat Note", m_elementToNote[selected]);
+                    tsl::elm::ToggleListItem* item = dynamic_cast<tsl::elm::ToggleListItem*>(selected);
+                    std::string title = "";
+                    if(item) {
+                         title = item->getText();
+                         if (title.find("\uE0E3 ") == 0) title = title.substr(5);
+                    } else {
+                        title = "Cheat Note";
+                    }
+
+                    tsl::changeTo<GuiNote>(title, m_elementToNote[selected]);
                     return true;
                 }
             }
@@ -348,6 +392,7 @@ private:
     std::map<tsl::elm::Element*, std::string> m_elementToNote;
 };
 
+// --- GUI STATS (Unchanged) ---
 class GuiStats : public tsl::Gui {
 public:
     GuiStats() { 
@@ -459,6 +504,7 @@ private:
     std::string m_ipAddressString;
 };
 
+// --- IMPLEMENTATION OF GuiMain::createUI ---
 tsl::elm::Element* GuiMain::createUI() {
     auto *rootFrame = new tsl::elm::HeaderOverlayFrame();
     rootFrame->setHeader(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *renderer, s32 x, s32 y, s32 w, s32 h) {
@@ -506,6 +552,7 @@ tsl::elm::Element* GuiMain::createUI() {
     return rootFrame;
 }
 
+// --- EdiZonOverlay Class ---
 class EdiZonOverlay : public tsl::Overlay {
 public:
     EdiZonOverlay() { }
