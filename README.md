@@ -18,13 +18,13 @@ Place a new text file called notes.txt in that directory with all your cheats fo
 
 In your notes text document, you can add notes using this tag
 
-	[**Note:<Cheat Name>**]
+	[<Cheat Name>]
 	
 Example: 
 
-	[**Note:hp doesnt decrease**]
+	[hp doesnt decrease]
 	"Hold ZL to enable infinite HP"
-	[**Note:Restore Code (Use after unchecking any cheats below)**]
+	[Restore Code (Use after unchecking any cheats below)]
 	"Use this to disable any asm codes used"
 	
 This will help keep your cheat files clean and allow users/cheat devs to opt in or out and use notes on their codes.
